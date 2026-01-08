@@ -19,6 +19,11 @@ const EDGE_STYLES = [
   { id: 'dotted', label: 'Puntinata', dash: '2,2' },
 ];
 
+// --- Helper per generare ID univoci compatibili con tutti i browser ---
+const makeId = () => {
+  return 'id-' + Math.random().toString(36).substr(2, 9);
+};
+
 const ProcessEditor = () => {
   // --- Stati principali ---
   const [nodes, setNodes] = useState([]);
@@ -239,7 +244,7 @@ const ProcessEditor = () => {
   // --- Gestione Nodi ---
   const addNode = (worldX, worldY) => {
     const newNode = {
-      id: crypto.randomUUID(),
+      id: makeId(),
       x: worldX - 70,
       y: worldY - 25,
       text: "Nuovo Step",
@@ -291,7 +296,7 @@ const ProcessEditor = () => {
     const exists = edges.some(e => e.from === fromId && e.to === toId);
     if (!exists) {
       setEdges(prev => [...prev, {
-        id: crypto.randomUUID(),
+        id: makeId(),
         from: fromId,
         to: toId,
         style: 'solid',
