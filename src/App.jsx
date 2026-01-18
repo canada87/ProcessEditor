@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Plus, ArrowRight, Move, Trash2, Eraser, MousePointer2, Save, Upload, X, Palette, Activity, Layout, Type } from 'lucide-react';
+import { Plus, ArrowRight, Move, Trash2, Eraser, MousePointer2, Save, Upload, X, Palette, Activity, Layout, Type, Grid3X3 } from 'lucide-react';
 
 // Palette colori nodi
 const NODE_COLORS = [
@@ -19,11 +19,13 @@ const EDGE_STYLES = [
   { id: 'dotted', label: 'Puntinata', dash: '2,2' },
 ];
 
+const GRID_SIZE = 20; // Dimensione della griglia in pixel
+
 const ProcessEditor = () => {
   // --- Stati principali ---
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
-  const [groups, setGroups] = useState([]); // NUOVO: Stato per i riquadri/gruppi
+  const [groups, setGroups] = useState([]);
   const [mode, setMode] = useState('pointer'); // 'pointer', 'node', 'edge'
 
   // --- Viewport (Zoom e Pan) ---
@@ -31,9 +33,14 @@ const ProcessEditor = () => {
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
 
+  // --- Opzioni ---
+  const [snapToGrid, setSnapToGrid] = useState(true); // Default ATTIVO
+  const [autoConnect, setAutoConnect] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
   // --- Selezione Multipla ---
   const [selectedNodeIds, setSelectedNodeIds] = useState(new Set());
-  const [selectedGroupIds, setSelectedGroupIds] = useState(new Set()); // NUOVO: Selezione gruppi
+  const [selectedGroupIds, setSelectedGroupIds] = useState(new Set());
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
   const [hoveredNodeId, setHoveredNodeId] = useState(null);
 
@@ -48,10 +55,6 @@ const ProcessEditor = () => {
   const [isDraggingItems, setIsDraggingItems] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
 
-  // --- Opzioni ---
-  const [autoConnect, setAutoConnect] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
-
   // --- Riferimenti ---
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -61,14 +64,25 @@ const ProcessEditor = () => {
   const NODE_WIDTH = 140;
   const NODE_HEIGHT = 50;
 
+  // --- Helper Funzione Snap ---
+  const snap = (value) => {
+      return Math.round(value / GRID_SIZE) * GRID_SIZE;
+  };
+
+  const getSnappedPos = (pos) => {
+      if (!snapToGrid) return pos;
+      return { x: snap(pos.x), y: snap(pos.y) };
+  };
+
   // --- Gestione Salvataggio/Caricamento Progetto (JSON) ---
   const handleSaveProject = () => {
     const projectData = {
-      version: 5, // Incremento versione per supporto gruppi
+      version: 5,
       nodes: nodes,
       edges: edges,
       groups: groups,
-      viewport: viewport
+      viewport: viewport,
+      snapToGrid: snapToGrid // Salviamo anche la preferenza griglia
     };
 
     const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
@@ -93,9 +107,10 @@ const ProcessEditor = () => {
         if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
           setNodes(data.nodes);
           setEdges(data.edges.map(e => ({ ...e, isEditing: false })));
-          setGroups(Array.isArray(data.groups) ? data.groups.map(g => ({...g, isEditing: false})) : []); // Carica gruppi
+          setGroups(Array.isArray(data.groups) ? data.groups.map(g => ({...g, isEditing: false})) : []);
 
           if (data.viewport) setViewport(data.viewport);
+          if (data.snapToGrid !== undefined) setSnapToGrid(data.snapToGrid);
 
           setSelectedNodeIds(new Set());
           setSelectedGroupIds(new Set());
@@ -134,11 +149,21 @@ const ProcessEditor = () => {
 
   // --- Gestione Nodi ---
   const addNode = (worldX, worldY) => {
+    // Calcola posizione centrata
+    let posX = worldX - NODE_WIDTH / 2;
+    let posY = worldY - NODE_HEIGHT / 2;
+
+    // Applica Snap se attivo
+    if (snapToGrid) {
+        posX = snap(posX);
+        posY = snap(posY);
+    }
+
     const newNode = {
       id: crypto.randomUUID(),
-      x: worldX - NODE_WIDTH / 2,
-      y: worldY - NODE_HEIGHT / 2,
-      text: "", // Inizia vuoto come richiesto
+      x: posX,
+      y: posY,
+      text: "",
       color: 'bg-white',
       isEditing: true
     };
@@ -170,19 +195,30 @@ const ProcessEditor = () => {
     const padding = 30;
     const headerHeight = 30;
 
+    let gX = minX - padding;
+    let gY = minY - padding - headerHeight;
+    let gW = maxX - minX + (padding * 2);
+    let gH = maxY - minY + (padding * 2) + headerHeight;
+
+    if (snapToGrid) {
+        gX = snap(gX);
+        gY = snap(gY);
+        // Opzionale: snap anche delle dimensioni per allineare i bordi alla griglia
+        gW = snap(gW);
+        gH = snap(gH);
+    }
+
     const newGroup = {
         id: crypto.randomUUID(),
-        x: minX - padding,
-        y: minY - padding - headerHeight,
-        width: maxX - minX + (padding * 2),
-        height: maxY - minY + (padding * 2) + headerHeight,
-        label: "", // Inizia vuoto come richiesto
+        x: gX,
+        y: gY,
+        width: gW,
+        height: gH,
+        label: "",
         isEditing: true
     };
 
     setGroups(prev => [...prev, newGroup]);
-
-    // Seleziona il nuovo gruppo e deseleziona i nodi (opzionale, ma spesso comodo)
     setSelectedGroupIds(new Set([newGroup.id]));
     setSelectedNodeIds(new Set());
   };
@@ -234,18 +270,15 @@ const ProcessEditor = () => {
   };
 
   const deleteSelected = () => {
-    // Elimina nodi
     if (selectedNodeIds.size > 0) {
         setNodes(nodes.filter(n => !selectedNodeIds.has(n.id)));
         setEdges(edges.filter(e => !selectedNodeIds.has(e.from) && !selectedNodeIds.has(e.to)));
         setSelectedNodeIds(new Set());
     }
-    // Elimina gruppi
     if (selectedGroupIds.size > 0) {
         setGroups(groups.filter(g => !selectedGroupIds.has(g.id)));
         setSelectedGroupIds(new Set());
     }
-    // Elimina arco
     if (selectedEdgeId) {
         deleteEdge(selectedEdgeId);
     }
@@ -321,8 +354,6 @@ const ProcessEditor = () => {
         const worldPos = screenToWorld(e.clientX, e.clientY);
 
         if (mode === 'pointer') {
-            // Se clicco su un gruppo (ma non su un nodo), lo gestisco in handleGroupMouseDown.
-            // Se arrivo qui, ho cliccato sul vuoto.
             setSelectionBox({
                 startX: worldPos.x, startY: worldPos.y,
                 currentX: worldPos.x, currentY: worldPos.y
@@ -330,7 +361,7 @@ const ProcessEditor = () => {
 
             if (!e.shiftKey) {
                 setSelectedNodeIds(new Set());
-                setSelectedGroupIds(new Set()); // Pulisco selezione gruppi
+                setSelectedGroupIds(new Set());
                 setSelectedEdgeId(null);
             }
         }
@@ -358,11 +389,18 @@ const ProcessEditor = () => {
     }
 
     if (isDraggingItems && mode === 'pointer') {
-        const dx = worldPos.x - lastMousePos.x;
-        const dy = worldPos.y - lastMousePos.y;
-        moveSelectedItems(dx, dy);
-        setLastMousePos(worldPos);
-        hasMovedRef.current = true;
+        // Logica per movimento con Snap
+        const targetX = snapToGrid ? snap(worldPos.x) : worldPos.x;
+        const targetY = snapToGrid ? snap(worldPos.y) : worldPos.y;
+
+        const dx = targetX - lastMousePos.x;
+        const dy = targetY - lastMousePos.y;
+
+        if (dx !== 0 || dy !== 0) {
+            moveSelectedItems(dx, dy);
+            setLastMousePos({ x: targetX, y: targetY });
+            hasMovedRef.current = true;
+        }
         return;
     }
 
@@ -374,12 +412,10 @@ const ProcessEditor = () => {
         const x2 = Math.max(selectionBox.startX, worldPos.x);
         const y2 = Math.max(selectionBox.startY, worldPos.y);
 
-        // Selezione Nodi
         const nodesInBox = nodes.filter(n =>
             n.x < x2 && (n.x + NODE_WIDTH) > x1 && n.y < y2 && (n.y + NODE_HEIGHT) > y1
         ).map(n => n.id);
 
-        // Selezione Gruppi (se il box tocca il gruppo)
         const groupsInBox = groups.filter(g =>
             g.x < x2 && (g.x + g.width) > x1 && g.y < y2 && (g.y + g.height) > y1
         ).map(g => g.id);
@@ -388,7 +424,6 @@ const ProcessEditor = () => {
             setSelectedNodeIds(new Set(nodesInBox));
             setSelectedGroupIds(new Set(groupsInBox));
         } else {
-            // Logica additiva semplificata
             const newN = new Set(selectedNodeIds);
             nodesInBox.forEach(id => newN.add(id));
             setSelectedNodeIds(newN);
@@ -429,12 +464,12 @@ const ProcessEditor = () => {
           if (!newSelection.has(nodeId)) {
               newSelection = new Set([nodeId]);
               setSelectedNodeIds(newSelection);
-              // Se seleziono un nodo singolarmente senza shift, deseleziono i gruppi per evitare confusione
               setSelectedGroupIds(new Set());
           }
       }
       setIsDraggingItems(true);
-      setLastMousePos(worldPos);
+      // Inizializza lastMousePos con valore snappato se la griglia è attiva
+      setLastMousePos(getSnappedPos(worldPos));
       setSelectedEdgeId(null);
     } else if (mode === 'node') {
         setSelectedNodeIds(new Set([nodeId]));
@@ -444,7 +479,6 @@ const ProcessEditor = () => {
   };
 
   const handleGroupMouseDown = (e, groupId) => {
-    // Interrompiamo la propagazione solo se siamo in modalità pointer, altrimenti lasciamo che il canvas gestisca (es. per creare nodi sopra i gruppi)
     if (mode === 'pointer') {
         e.stopPropagation();
         if (e.button !== 0) return;
@@ -459,12 +493,12 @@ const ProcessEditor = () => {
             if (!newSelection.has(groupId)) {
                 newSelection = new Set([groupId]);
                 setSelectedGroupIds(newSelection);
-                // Manteniamo i nodi selezionati? Generalmente no se clicco sul gruppo
                 setSelectedNodeIds(new Set());
             }
         }
         setIsDraggingItems(true);
-        setLastMousePos(worldPos);
+        // Inizializza lastMousePos con valore snappato se la griglia è attiva
+        setLastMousePos(getSnappedPos(worldPos));
         setSelectedEdgeId(null);
     }
   };
@@ -569,7 +603,16 @@ const ProcessEditor = () => {
         <div className="flex items-center gap-2">
             <div className="text-xs text-slate-400 font-mono hidden xl:block mr-2">Zoom: {(viewport.zoom * 100).toFixed(0)}%</div>
 
-            {/* Pulsante Crea Gruppo (visibile se ci sono nodi selezionati) */}
+            {/* Pulsante Grid Toggle */}
+            <button
+                onClick={() => setSnapToGrid(!snapToGrid)}
+                className={`flex items-center gap-1 px-2 py-2 rounded-md transition-colors border ${snapToGrid ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'text-slate-400 border-transparent hover:bg-slate-100'}`}
+                title={snapToGrid ? "Griglia Attiva" : "Griglia Disattivata"}
+            >
+                <Grid3X3 size={18} />
+            </button>
+
+            {/* Pulsante Crea Gruppo */}
             {selectedNodeIds.size > 0 && (
                 <button
                     onClick={createGroupFromSelection}
@@ -654,7 +697,7 @@ const ProcessEditor = () => {
                                     autoFocus
                                     type="text"
                                     defaultValue={group.label}
-                                    placeholder="Nome Gruppo" // Placeholder aggiunto
+                                    placeholder="Nome Gruppo"
                                     onBlur={(e) => updateGroupLabel(group.id, e.target.value)}
                                     onKeyDown={(e) => { if (e.key === 'Enter') updateGroupLabel(group.id, e.currentTarget.value); }}
                                     className="bg-white border border-indigo-400 rounded px-1 py-0.5 text-sm text-indigo-700 font-bold outline-none shadow-sm min-w-[100px]"
