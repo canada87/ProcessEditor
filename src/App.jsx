@@ -1,5 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Plus, ArrowRight, Move, Trash2, Eraser, MousePointer2, Save, Upload, X, Palette, Activity, Layout, Type, Grid3X3 } from 'lucide-react';
+import {
+  Plus,
+  ArrowRight,
+  ArrowLeft,
+  ArrowLeftRight,
+  Minus,
+  Move,
+  Trash2,
+  Eraser,
+  MousePointer2,
+  Save,
+  Upload,
+  X,
+  Palette,
+  Activity,
+  Layout,
+  Grid3X3,
+  MousePointerClick
+} from 'lucide-react';
 
 // Palette colori nodi
 const NODE_COLORS = [
@@ -17,6 +35,14 @@ const EDGE_STYLES = [
   { id: 'solid', label: 'Continua', dash: '' },
   { id: 'dashed', label: 'Tratteggiata', dash: '5,5' },
   { id: 'dotted', label: 'Puntinata', dash: '2,2' },
+];
+
+// Tipi di frecce (Direzione)
+const EDGE_ARROWS = [
+  { id: 'end', label: 'Fine', icon: <ArrowRight size={18} /> },
+  { id: 'start', label: 'Inizio', icon: <ArrowLeft size={18} /> },
+  { id: 'both', label: 'Entrambi', icon: <ArrowLeftRight size={18} /> },
+  { id: 'none', label: 'Nessuna', icon: <Minus size={18} /> },
 ];
 
 const GRID_SIZE = 20; // Dimensione della griglia in pixel
@@ -77,12 +103,12 @@ const ProcessEditor = () => {
   // --- Gestione Salvataggio/Caricamento Progetto (JSON) ---
   const handleSaveProject = () => {
     const projectData = {
-      version: 5,
+      version: 7, // Incrementata versione
       nodes: nodes,
       edges: edges,
       groups: groups,
       viewport: viewport,
-      snapToGrid: snapToGrid // Salviamo anche la preferenza griglia
+      snapToGrid: snapToGrid
     };
 
     const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
@@ -106,7 +132,12 @@ const ProcessEditor = () => {
         const data = JSON.parse(event.target.result);
         if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
           setNodes(data.nodes);
-          setEdges(data.edges.map(e => ({ ...e, isEditing: false })));
+          // Mappatura per retrocompatibilità: se manca 'arrow', metti 'none' (o 'end' se preferisci mantenere legacy)
+          setEdges(data.edges.map(e => ({
+            ...e,
+            isEditing: false,
+            arrow: e.arrow || 'none'
+          })));
           setGroups(Array.isArray(data.groups) ? data.groups.map(g => ({...g, isEditing: false})) : []);
 
           if (data.viewport) setViewport(data.viewport);
@@ -294,6 +325,7 @@ const ProcessEditor = () => {
         from: fromId,
         to: toId,
         style: 'solid',
+        arrow: 'none', // MODIFICATO: Default nessuna freccia
         text: '',
         isEditing: false
       }]);
@@ -303,6 +335,13 @@ const ProcessEditor = () => {
   const updateEdgeStyle = (id, newStyle) => {
     setEdges(prev => prev.map(e =>
         e.id === id ? { ...e, style: newStyle } : e
+    ));
+  };
+
+  // Funzione per aggiornare la direzione della freccia
+  const updateEdgeArrow = (id, newArrowType) => {
+    setEdges(prev => prev.map(e =>
+      e.id === id ? { ...e, arrow: newArrowType } : e
     ));
   };
 
@@ -509,31 +548,77 @@ const ProcessEditor = () => {
       const toNode = nodes.find(n => n.id === edge.to);
       if (!fromNode || !toNode) return null;
 
-      const start = { x: fromNode.x + NODE_WIDTH/2, y: fromNode.y + NODE_HEIGHT/2 };
-      const endRaw = { x: toNode.x + NODE_WIDTH/2, y: toNode.y + NODE_HEIGHT/2 };
-      const angle = Math.atan2(endRaw.y - start.y, endRaw.x - start.x);
-      const endX = endRaw.x - 0 * Math.cos(angle);
-      const endY = endRaw.y - 0 * Math.sin(angle);
+      // Centri dei nodi
+      const fromCenter = { x: fromNode.x + NODE_WIDTH/2, y: fromNode.y + NODE_HEIGHT/2 };
+      const toCenter = { x: toNode.x + NODE_WIDTH/2, y: toNode.y + NODE_HEIGHT/2 };
+
+      const dx = toCenter.x - fromCenter.x;
+      const dy = toCenter.y - fromCenter.y;
+      const angle = Math.atan2(dy, dx);
+
+      // Calcolo intersezione con i bordi del rettangolo
+      const w = NODE_WIDTH / 2;
+      const h = NODE_HEIGHT / 2;
+
+      const getBorderPoint = (angleRad) => {
+          const tan = Math.tan(angleRad);
+          let x, y;
+          if (Math.abs(w * tan) <= h) {
+             x = Math.cos(angleRad) > 0 ? w : -w;
+             y = x * tan;
+          } else {
+             y = Math.sin(angleRad) > 0 ? h : -h;
+             x = y / tan;
+          }
+          return { x, y };
+      };
+
+      const startOffset = getBorderPoint(angle);
+      const startX = fromCenter.x + startOffset.x;
+      const startY = fromCenter.y + startOffset.y;
+
+      const endOffset = getBorderPoint(angle + Math.PI);
+      const endX = toCenter.x + endOffset.x;
+      const endY = toCenter.y + endOffset.y;
+
       const arrowLen = 10;
       const arrowAngle = Math.PI / 6;
-      const p1x = endX - arrowLen * Math.cos(angle - arrowAngle);
-      const p1y = endY - arrowLen * Math.sin(angle - arrowAngle);
-      const p2x = endX - arrowLen * Math.cos(angle + arrowAngle);
-      const p2y = endY - arrowLen * Math.sin(angle + arrowAngle);
-      const midX = (start.x + endX) / 2;
-      const midY = (start.y + endY) / 2;
 
-      return { start, end: { x: endX, y: endY }, arrowPoly: `${endX},${endY} ${p1x},${p1y} ${p2x},${p2y}`, mid: { x: midX, y: midY } };
+      const endP1x = endX - arrowLen * Math.cos(angle - arrowAngle);
+      const endP1y = endY - arrowLen * Math.sin(angle - arrowAngle);
+      const endP2x = endX - arrowLen * Math.cos(angle + arrowAngle);
+      const endP2y = endY - arrowLen * Math.sin(angle + arrowAngle);
+
+      const startAngle = angle + Math.PI;
+      const startP1x = startX - arrowLen * Math.cos(startAngle - arrowAngle);
+      const startP1y = startY - arrowLen * Math.sin(startAngle - arrowAngle);
+      const startP2x = startX - arrowLen * Math.cos(startAngle + arrowAngle);
+      const startP2y = startY - arrowLen * Math.sin(startAngle + arrowAngle);
+
+      const midX = (startX + endX) / 2;
+      const midY = (startY + endY) / 2;
+
+      return {
+          start: { x: startX, y: startY },
+          end: { x: endX, y: endY },
+          arrowEndPoly: `${endX},${endY} ${endP1x},${endP1y} ${endP2x},${endP2y}`,
+          arrowStartPoly: `${startX},${startY} ${startP1x},${startP1y} ${startP2x},${startP2y}`,
+          mid: { x: midX, y: midY }
+      };
   };
 
   // --- Rendering Functions ---
   const renderEdgeLine = (edge) => {
     const metrics = getEdgeMetrics(edge);
     if (!metrics) return null;
-    const { start, end, arrowPoly } = metrics;
+    const { start, end, arrowEndPoly, arrowStartPoly } = metrics;
     const isSelected = selectedEdgeId === edge.id;
     const strokeColor = isSelected ? "#6366f1" : "#94a3b8";
     const styleObj = EDGE_STYLES.find(s => s.id === edge.style) || EDGE_STYLES[0];
+
+    // Determina quali frecce disegnare
+    const showStartArrow = edge.arrow === 'start' || edge.arrow === 'both';
+    const showEndArrow = edge.arrow === 'end' || edge.arrow === 'both';
 
     return (
       <g key={edge.id}
@@ -543,7 +628,8 @@ const ProcessEditor = () => {
       >
         <path d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`} stroke="transparent" strokeWidth="20" />
         <path d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`} stroke={strokeColor} strokeWidth={isSelected ? "3" : "2"} strokeDasharray={styleObj.dash} />
-        <polygon points={arrowPoly} fill={strokeColor} />
+        {showEndArrow && <polygon points={arrowEndPoly} fill={strokeColor} />}
+        {showStartArrow && <polygon points={arrowStartPoly} fill={strokeColor} />}
       </g>
     );
   };
@@ -556,7 +642,7 @@ const ProcessEditor = () => {
     if (!edge.text && !edge.isEditing && !isSelected) return null;
 
     return (
-        <div key={`overlay-${edge.id}`} style={{ position: 'absolute', left: mid.x, top: mid.y, transform: 'translate(-50%, -50%)', pointerEvents: 'none' }} className="flex flex-col items-center justify-center z-20">
+        <div key={`overlay-${edge.id}`} style={{ position: 'absolute', left: mid.x, top: mid.y, transform: 'translate(-50%, -50%)', pointerEvents: 'none' }} className="flex flex-col items-center justify-center z-50">
             {(edge.text || edge.isEditing) && (
                 <div className="pointer-events-auto mb-1" onDoubleClick={(e) => { e.stopPropagation(); startEditingEdge(edge.id); }}>
                     {edge.isEditing ? (
@@ -603,7 +689,6 @@ const ProcessEditor = () => {
         <div className="flex items-center gap-2">
             <div className="text-xs text-slate-400 font-mono hidden xl:block mr-2">Zoom: {(viewport.zoom * 100).toFixed(0)}%</div>
 
-            {/* Pulsante Grid Toggle */}
             <button
                 onClick={() => setSnapToGrid(!snapToGrid)}
                 className={`flex items-center gap-1 px-2 py-2 rounded-md transition-colors border ${snapToGrid ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'text-slate-400 border-transparent hover:bg-slate-100'}`}
@@ -612,7 +697,6 @@ const ProcessEditor = () => {
                 <Grid3X3 size={18} />
             </button>
 
-            {/* Pulsante Crea Gruppo */}
             {selectedNodeIds.size > 0 && (
                 <button
                     onClick={createGroupFromSelection}
@@ -629,7 +713,6 @@ const ProcessEditor = () => {
                 <span className="hidden md:inline">Auto-collega</span>
             </label>
 
-            {/* Colori Nodi */}
             {selectedNodeIds.size > 0 && (
                 <div className="flex items-center gap-1 border-l border-r border-slate-200 px-3 mx-1 animate-in fade-in zoom-in duration-200">
                     <Palette size={16} className="text-slate-400 mr-1" />
@@ -639,19 +722,35 @@ const ProcessEditor = () => {
                 </div>
             )}
 
-            {/* Stili Linee */}
             {selectedEdgeId && (
-                <div className="flex items-center gap-1 border-l border-r border-slate-200 px-3 mx-1 animate-in fade-in zoom-in duration-200">
-                    <Activity size={16} className="text-slate-400 mr-1" />
-                    {EDGE_STYLES.map(style => (
-                        <button key={style.id} onClick={() => updateEdgeStyle(selectedEdgeId, style.id)} className={`w-8 h-8 flex items-center justify-center rounded hover:bg-slate-100 border border-slate-200 transition-colors ${edges.find(e => e.id === selectedEdgeId)?.style === style.id ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200' : 'bg-white'}`} title={style.label}>
-                            <svg width="20" height="2" overflow="visible"><line x1="0" y1="1" x2="20" y2="1" stroke="currentColor" strokeWidth="2" strokeDasharray={style.dash === '5,5' ? '4,2' : style.dash === '2,2' ? '1,2' : ''} className="text-slate-700" /></svg>
-                        </button>
-                    ))}
+                <div className="flex items-center gap-3 border-l border-r border-slate-200 px-3 mx-1 animate-in fade-in zoom-in duration-200">
+                    <div className="flex items-center gap-1">
+                        <Activity size={16} className="text-slate-400 mr-1" />
+                        {EDGE_STYLES.map(style => (
+                            <button key={style.id} onClick={() => updateEdgeStyle(selectedEdgeId, style.id)} className={`w-8 h-8 flex items-center justify-center rounded hover:bg-slate-100 border border-slate-200 transition-colors ${edges.find(e => e.id === selectedEdgeId)?.style === style.id ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200' : 'bg-white'}`} title={style.label}>
+                                <svg width="20" height="2" overflow="visible"><line x1="0" y1="1" x2="20" y2="1" stroke="currentColor" strokeWidth="2" strokeDasharray={style.dash === '5,5' ? '4,2' : style.dash === '2,2' ? '1,2' : ''} className="text-slate-700" /></svg>
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="w-px h-6 bg-slate-200"></div>
+
+                    <div className="flex items-center gap-1">
+                        <MousePointerClick size={16} className="text-slate-400 mr-1" />
+                        {EDGE_ARROWS.map(arrowType => (
+                            <button
+                                key={arrowType.id}
+                                onClick={() => updateEdgeArrow(selectedEdgeId, arrowType.id)}
+                                className={`w-8 h-8 flex items-center justify-center rounded hover:bg-slate-100 border border-slate-200 transition-colors ${edges.find(e => e.id === selectedEdgeId)?.arrow === arrowType.id ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200 text-indigo-600' : 'bg-white text-slate-500'}`}
+                                title={arrowType.label}
+                            >
+                                {arrowType.icon}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             )}
 
-            {/* Cestino */}
             {(selectedNodeIds.size > 0 || selectedEdgeId || selectedGroupIds.size > 0) && (
                 <button onClick={deleteSelected} className="bg-red-100 text-red-600 hover:bg-red-200 p-2 rounded transition-colors mr-2" title="Elimina Selezionato">
                     <Trash2 size={18} />
@@ -674,7 +773,7 @@ const ProcessEditor = () => {
             <div style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`, transformOrigin: '0 0', width: '100%', height: '100%' }} className="relative w-full h-full">
                 <div className="absolute -inset-[5000px] pointer-events-none opacity-10" style={{ backgroundImage: 'radial-gradient(#64748b 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
 
-                {/* Layer Gruppi (Sotto tutto) */}
+                {/* Layer Gruppi */}
                 {groups.map(group => (
                     <div
                         key={group.id}
@@ -690,7 +789,6 @@ const ProcessEditor = () => {
                             ${mode === 'pointer' ? 'cursor-move' : ''}
                         `}
                     >
-                        {/* Etichetta Gruppo */}
                         <div className="px-2 py-1 -mt-8 self-start max-w-full">
                             {group.isEditing ? (
                                 <input
@@ -720,8 +818,8 @@ const ProcessEditor = () => {
                     )}
                 </svg>
 
-                {/* Layer Overlay (Edge labels) e Selection Box */}
-                <div className="absolute top-0 left-0 w-0 h-0 overflow-visible z-20 pointer-events-none">
+                {/* Layer Overlay (Edge labels) e Selection Box (Z-INDEX AUMENTATO A z-50) */}
+                <div className="absolute top-0 left-0 w-0 h-0 overflow-visible z-50 pointer-events-none">
                      {edges.map(renderEdgeOverlay)}
                      {renderSelectionBox()}
                 </div>
@@ -739,9 +837,21 @@ const ProcessEditor = () => {
                         className={`absolute z-30 flex flex-col items-center justify-center p-2 rounded-lg border-2 shadow-sm select-none
                             ${selectedNodeIds.has(node.id) ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-300 hover:border-indigo-300'}
                             ${mode === 'edge' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}
-                            ${node.color || 'bg-white'} transition-colors duration-200
+                            ${node.color || 'bg-white'} transition-colors duration-200 group
                         `}
                     >
+                        {/* NUOVO: Pulsante Cancella Nodo (visibile solo se selezionato) */}
+                        {selectedNodeIds.has(node.id) && mode === 'pointer' && (
+                            <button
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onClick={(e) => { e.stopPropagation(); deleteSelected(); }}
+                                className="absolute -top-3 -right-3 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 hover:scale-110 transition-all z-50 flex items-center justify-center w-6 h-6"
+                                title="Elimina nodo"
+                            >
+                                <X size={14} strokeWidth={3} />
+                            </button>
+                        )}
+
                         {node.isEditing ? (
                             <input autoFocus type="text" defaultValue={node.text} placeholder="Nome Step" onBlur={(e) => updateNodeText(node.id, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') updateNodeText(node.id, e.currentTarget.value); }} className="w-full text-center text-sm p-1 border-b border-indigo-500 outline-none bg-transparent" onMouseDown={(e) => e.stopPropagation()} />
                         ) : (
