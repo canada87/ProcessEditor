@@ -103,7 +103,7 @@ const ProcessEditor = () => {
   // --- Gestione Salvataggio/Caricamento Progetto (JSON) ---
   const handleSaveProject = () => {
     const projectData = {
-      version: 7, // Incrementata versione
+      version: 8, // Incrementata versione per curve
       nodes: nodes,
       edges: edges,
       groups: groups,
@@ -132,7 +132,6 @@ const ProcessEditor = () => {
         const data = JSON.parse(event.target.result);
         if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
           setNodes(data.nodes);
-          // Mappatura per retrocompatibilità: se manca 'arrow', metti 'none' (o 'end' se preferisci mantenere legacy)
           setEdges(data.edges.map(e => ({
             ...e,
             isEditing: false,
@@ -180,11 +179,9 @@ const ProcessEditor = () => {
 
   // --- Gestione Nodi ---
   const addNode = (worldX, worldY) => {
-    // Calcola posizione centrata
     let posX = worldX - NODE_WIDTH / 2;
     let posY = worldY - NODE_HEIGHT / 2;
 
-    // Applica Snap se attivo
     if (snapToGrid) {
         posX = snap(posX);
         posY = snap(posY);
@@ -217,7 +214,6 @@ const ProcessEditor = () => {
 
     const selectedNodesList = nodes.filter(n => selectedNodeIds.has(n.id));
 
-    // Calcola bounding box
     const minX = Math.min(...selectedNodesList.map(n => n.x));
     const minY = Math.min(...selectedNodesList.map(n => n.y));
     const maxX = Math.max(...selectedNodesList.map(n => n.x + NODE_WIDTH));
@@ -234,7 +230,6 @@ const ProcessEditor = () => {
     if (snapToGrid) {
         gX = snap(gX);
         gY = snap(gY);
-        // Opzionale: snap anche delle dimensioni per allineare i bordi alla griglia
         gW = snap(gW);
         gH = snap(gH);
     }
@@ -266,15 +261,13 @@ const ProcessEditor = () => {
     ));
   };
 
-  // --- Spostamento Unificato (Nodi e Gruppi) ---
+  // --- Spostamento Unificato ---
   const moveSelectedItems = (dx, dy) => {
-    // Sposta nodi selezionati
     if (selectedNodeIds.size > 0) {
         setNodes(prev => prev.map(n =>
             selectedNodeIds.has(n.id) ? { ...n, x: n.x + dx, y: n.y + dy } : n
         ));
     }
-    // Sposta gruppi selezionati
     if (selectedGroupIds.size > 0) {
         setGroups(prev => prev.map(g =>
             selectedGroupIds.has(g.id) ? { ...g, x: g.x + dx, y: g.y + dy } : g
@@ -325,7 +318,7 @@ const ProcessEditor = () => {
         from: fromId,
         to: toId,
         style: 'solid',
-        arrow: 'none', // MODIFICATO: Default nessuna freccia
+        arrow: 'end', // Default con freccia alla fine
         text: '',
         isEditing: false
       }]);
@@ -338,7 +331,6 @@ const ProcessEditor = () => {
     ));
   };
 
-  // Funzione per aggiornare la direzione della freccia
   const updateEdgeArrow = (id, newArrowType) => {
     setEdges(prev => prev.map(e =>
       e.id === id ? { ...e, arrow: newArrowType } : e
@@ -428,10 +420,8 @@ const ProcessEditor = () => {
     }
 
     if (isDraggingItems && mode === 'pointer') {
-        // Logica per movimento con Snap
         const targetX = snapToGrid ? snap(worldPos.x) : worldPos.x;
         const targetY = snapToGrid ? snap(worldPos.y) : worldPos.y;
-
         const dx = targetX - lastMousePos.x;
         const dy = targetY - lastMousePos.y;
 
@@ -445,7 +435,6 @@ const ProcessEditor = () => {
 
     if (selectionBox) {
         setSelectionBox(prev => ({ ...prev, currentX: worldPos.x, currentY: worldPos.y }));
-
         const x1 = Math.min(selectionBox.startX, worldPos.x);
         const y1 = Math.min(selectionBox.startY, worldPos.y);
         const x2 = Math.max(selectionBox.startX, worldPos.x);
@@ -454,7 +443,6 @@ const ProcessEditor = () => {
         const nodesInBox = nodes.filter(n =>
             n.x < x2 && (n.x + NODE_WIDTH) > x1 && n.y < y2 && (n.y + NODE_HEIGHT) > y1
         ).map(n => n.id);
-
         const groupsInBox = groups.filter(g =>
             g.x < x2 && (g.x + g.width) > x1 && g.y < y2 && (g.y + g.height) > y1
         ).map(g => g.id);
@@ -466,7 +454,6 @@ const ProcessEditor = () => {
             const newN = new Set(selectedNodeIds);
             nodesInBox.forEach(id => newN.add(id));
             setSelectedNodeIds(newN);
-
             const newG = new Set(selectedGroupIds);
             groupsInBox.forEach(id => newG.add(id));
             setSelectedGroupIds(newG);
@@ -485,7 +472,6 @@ const ProcessEditor = () => {
     setIsDraggingItems(false);
   };
 
-  // --- Handler Specifici per Nodi e Gruppi ---
   const handleNodeMouseDown = (e, nodeId) => {
     e.stopPropagation();
     if (e.button !== 0) return;
@@ -507,7 +493,6 @@ const ProcessEditor = () => {
           }
       }
       setIsDraggingItems(true);
-      // Inizializza lastMousePos con valore snappato se la griglia è attiva
       setLastMousePos(getSnappedPos(worldPos));
       setSelectedEdgeId(null);
     } else if (mode === 'node') {
@@ -536,87 +521,153 @@ const ProcessEditor = () => {
             }
         }
         setIsDraggingItems(true);
-        // Inizializza lastMousePos con valore snappato se la griglia è attiva
         setLastMousePos(getSnappedPos(worldPos));
         setSelectedEdgeId(null);
     }
   };
 
-  // --- Helper Rendering ---
-  const getEdgeMetrics = (edge) => {
-      const fromNode = nodes.find(n => n.id === edge.from);
-      const toNode = nodes.find(n => n.id === edge.to);
-      if (!fromNode || !toNode) return null;
+  // --- NUOVA LOGICA: Calcolo Curve e Punti di Uscita/Entrata ---
 
-      // Centri dei nodi
-      const fromCenter = { x: fromNode.x + NODE_WIDTH/2, y: fromNode.y + NODE_HEIGHT/2 };
-      const toCenter = { x: toNode.x + NODE_WIDTH/2, y: toNode.y + NODE_HEIGHT/2 };
+  // Helper per calcolare i punti cardinali di un nodo
+  const getNodePorts = (node) => {
+    const halfW = NODE_WIDTH / 2;
+    const halfH = NODE_HEIGHT / 2;
+    const cx = node.x + halfW;
+    const cy = node.y + halfH;
+    return {
+        top:    { x: cx, y: node.y, side: 'top' },
+        right:  { x: node.x + NODE_WIDTH, y: cy, side: 'right' },
+        bottom: { x: cx, y: node.y + NODE_HEIGHT, side: 'bottom' },
+        left:   { x: node.x, y: cy, side: 'left' },
+        center: { x: cx, y: cy }
+    };
+  };
 
-      const dx = toCenter.x - fromCenter.x;
-      const dy = toCenter.y - fromCenter.y;
-      const angle = Math.atan2(dy, dx);
+  // Helper per creare i punti del poligono della freccia
+  const getArrowPolygon = (x, y, angleRad) => {
+      const arrowLen = 10;
+      const arrowWidth = Math.PI / 6; // 30 gradi
 
-      // Calcolo intersezione con i bordi del rettangolo
-      const w = NODE_WIDTH / 2;
-      const h = NODE_HEIGHT / 2;
+      const p1x = x - arrowLen * Math.cos(angleRad - arrowWidth);
+      const p1y = y - arrowLen * Math.sin(angleRad - arrowWidth);
+      const p2x = x - arrowLen * Math.cos(angleRad + arrowWidth);
+      const p2y = y - arrowLen * Math.sin(angleRad + arrowWidth);
 
-      const getBorderPoint = (angleRad) => {
-          const tan = Math.tan(angleRad);
-          let x, y;
-          if (Math.abs(w * tan) <= h) {
-             x = Math.cos(angleRad) > 0 ? w : -w;
-             y = x * tan;
+      return `${x},${y} ${p1x},${p1y} ${p2x},${p2y}`;
+  };
+
+  // Calcolo Metriche "Smart" con curve di Bezier
+  const getSmartEdgeMetrics = (edge) => {
+      const source = nodes.find(n => n.id === edge.from);
+      const target = nodes.find(n => n.id === edge.to);
+      if (!source || !target) return null;
+
+      const srcPorts = getNodePorts(source);
+      const tgtPorts = getNodePorts(target);
+
+      // Determina la direzione relativa principale per scegliere i lati
+      const dx = tgtPorts.center.x - srcPorts.center.x;
+      const dy = tgtPorts.center.y - srcPorts.center.y;
+      let startPort, endPort;
+
+      // Logica "Manhattan" semplificata per la scelta delle porte
+      if (Math.abs(dx) > Math.abs(dy)) {
+          // Relazione Orizzontale
+          if (dx > 0) {
+              startPort = srcPorts.right;
+              endPort = tgtPorts.left;
           } else {
-             y = Math.sin(angleRad) > 0 ? h : -h;
-             x = y / tan;
+              startPort = srcPorts.left;
+              endPort = tgtPorts.right;
           }
-          return { x, y };
+      } else {
+          // Relazione Verticale
+          if (dy > 0) {
+              startPort = srcPorts.bottom;
+              endPort = tgtPorts.top;
+          } else {
+              startPort = srcPorts.top;
+              endPort = tgtPorts.bottom;
+          }
+      }
+
+      // Calcolo punti di controllo Bezier
+      // La "curvatura" dipende dalla distanza, ma con limiti min/max
+      const dist = Math.hypot(endPort.x - startPort.x, endPort.y - startPort.y);
+      const controlDist = Math.min(Math.max(dist * 0.4, 50), 150);
+
+      let cp1 = { x: startPort.x, y: startPort.y };
+      let cp2 = { x: endPort.x, y: endPort.y };
+
+      // Sposta i punti di controllo in base al lato di uscita/entrata
+      const offsetControl = (point, side, amount) => {
+          if (side === 'top') return { x: point.x, y: point.y - amount };
+          if (side === 'bottom') return { x: point.x, y: point.y + amount };
+          if (side === 'left') return { x: point.x - amount, y: point.y };
+          if (side === 'right') return { x: point.x + amount, y: point.y };
+          return point;
       };
 
-      const startOffset = getBorderPoint(angle);
-      const startX = fromCenter.x + startOffset.x;
-      const startY = fromCenter.y + startOffset.y;
+      cp1 = offsetControl(startPort, startPort.side, controlDist);
+      cp2 = offsetControl(endPort, endPort.side, controlDist);
 
-      const endOffset = getBorderPoint(angle + Math.PI);
-      const endX = toCenter.x + endOffset.x;
-      const endY = toCenter.y + endOffset.y;
+      // Stringa Path SVG
+      const pathData = `M ${startPort.x} ${startPort.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${endPort.x} ${endPort.y}`;
 
-      const arrowLen = 10;
-      const arrowAngle = Math.PI / 6;
+      // Calcolo punto centrale della curva (t=0.5) per il testo
+      // Formula Bezier Cubica: B(t) = (1-t)^3 P0 + 3(1-t)^2 t P1 + 3(1-t) t^2 P2 + t^3 P3
+      const t = 0.5;
+      const midX = Math.pow(1-t, 3)*startPort.x + 3*Math.pow(1-t, 2)*t*cp1.x + 3*(1-t)*Math.pow(t, 2)*cp2.x + Math.pow(t, 3)*endPort.x;
+      const midY = Math.pow(1-t, 3)*startPort.y + 3*Math.pow(1-t, 2)*t*cp1.y + 3*(1-t)*Math.pow(t, 2)*cp2.y + Math.pow(t, 3)*endPort.y;
 
-      const endP1x = endX - arrowLen * Math.cos(angle - arrowAngle);
-      const endP1y = endY - arrowLen * Math.sin(angle - arrowAngle);
-      const endP2x = endX - arrowLen * Math.cos(angle + arrowAngle);
-      const endP2y = endY - arrowLen * Math.sin(angle + arrowAngle);
+      // Calcolo Frecce (Angolo fisso basato sul lato di entrata/uscita)
+      const getSideAngle = (side) => {
+          if (side === 'right') return 0;
+          if (side === 'bottom') return Math.PI / 2;
+          if (side === 'left') return Math.PI;
+          if (side === 'top') return -Math.PI / 2;
+          return 0;
+      };
 
-      const startAngle = angle + Math.PI;
-      const startP1x = startX - arrowLen * Math.cos(startAngle - arrowAngle);
-      const startP1y = startY - arrowLen * Math.sin(startAngle - arrowAngle);
-      const startP2x = startX - arrowLen * Math.cos(startAngle + arrowAngle);
-      const startP2y = startY - arrowLen * Math.sin(startAngle + arrowAngle);
+      // Nota: La freccia "start" deve puntare CONTRO la direzione di uscita, quella "end" NELLA direzione di entrata
+      // Per "End", se entro nel lato Left, la linea arriva da sinistra verso destra, quindi angolo 0.
+      // Se entro nel lato Right, la linea arriva da destra verso sinistra, quindi angolo PI.
+      const getEndArrowAngle = (side) => {
+          if (side === 'left') return 0;       // Entra da sinistra verso destra
+          if (side === 'right') return Math.PI; // Entra da destra verso sinistra
+          if (side === 'top') return Math.PI/2; // Entra dall'alto verso il basso
+          if (side === 'bottom') return -Math.PI/2; // Entra dal basso verso l'alto
+          return 0;
+      };
 
-      const midX = (startX + endX) / 2;
-      const midY = (startY + endY) / 2;
+      // Per "Start", se esco dal Right, la freccia punta verso sinistra (dentro il nodo)
+      const getStartArrowAngle = (side) => {
+          if (side === 'right') return Math.PI;
+          if (side === 'left') return 0;
+          if (side === 'bottom') return -Math.PI/2;
+          if (side === 'top') return Math.PI/2;
+          return 0;
+      };
 
       return {
-          start: { x: startX, y: startY },
-          end: { x: endX, y: endY },
-          arrowEndPoly: `${endX},${endY} ${endP1x},${endP1y} ${endP2x},${endP2y}`,
-          arrowStartPoly: `${startX},${startY} ${startP1x},${startP1y} ${startP2x},${startP2y}`,
-          mid: { x: midX, y: midY }
+          path: pathData,
+          start: startPort,
+          end: endPort,
+          mid: { x: midX, y: midY },
+          arrowEndPoly: getArrowPolygon(endPort.x, endPort.y, getEndArrowAngle(endPort.side)),
+          arrowStartPoly: getArrowPolygon(startPort.x, startPort.y, getStartArrowAngle(startPort.side))
       };
   };
 
-  // --- Rendering Functions ---
+  // --- Rendering Edges Aggiornato ---
   const renderEdgeLine = (edge) => {
-    const metrics = getEdgeMetrics(edge);
+    const metrics = getSmartEdgeMetrics(edge);
     if (!metrics) return null;
-    const { start, end, arrowEndPoly, arrowStartPoly } = metrics;
+    const { path, arrowEndPoly, arrowStartPoly } = metrics;
     const isSelected = selectedEdgeId === edge.id;
     const strokeColor = isSelected ? "#6366f1" : "#94a3b8";
     const styleObj = EDGE_STYLES.find(s => s.id === edge.style) || EDGE_STYLES[0];
 
-    // Determina quali frecce disegnare
     const showStartArrow = edge.arrow === 'start' || edge.arrow === 'both';
     const showEndArrow = edge.arrow === 'end' || edge.arrow === 'both';
 
@@ -624,10 +675,13 @@ const ProcessEditor = () => {
       <g key={edge.id}
          onClick={(e) => { e.stopPropagation(); if (mode === 'pointer') { setSelectedEdgeId(edge.id); setSelectedNodeIds(new Set()); setSelectedGroupIds(new Set()); } }}
          onDoubleClick={(e) => { e.stopPropagation(); startEditingEdge(edge.id); }}
-         className={`pointer-events-auto ${mode === 'pointer' ? 'cursor-pointer' : ''}`}
+         className={`pointer-events-auto ${mode === 'pointer' ? 'cursor-pointer' : ''} group`}
       >
-        <path d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`} stroke="transparent" strokeWidth="20" />
-        <path d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`} stroke={strokeColor} strokeWidth={isSelected ? "3" : "2"} strokeDasharray={styleObj.dash} />
+        {/* Linea invisibile più spessa per facilitare il click */}
+        <path d={path} stroke="transparent" strokeWidth="20" fill="none" />
+        {/* Linea visibile */}
+        <path d={path} stroke={strokeColor} strokeWidth={isSelected ? "3" : "2"} strokeDasharray={styleObj.dash} fill="none" className="transition-all duration-300" />
+
         {showEndArrow && <polygon points={arrowEndPoly} fill={strokeColor} />}
         {showStartArrow && <polygon points={arrowStartPoly} fill={strokeColor} />}
       </g>
@@ -635,7 +689,7 @@ const ProcessEditor = () => {
   };
 
   const renderEdgeOverlay = (edge) => {
-    const metrics = getEdgeMetrics(edge);
+    const metrics = getSmartEdgeMetrics(edge);
     if (!metrics) return null;
     const { mid } = metrics;
     const isSelected = selectedEdgeId === edge.id;
@@ -814,7 +868,16 @@ const ProcessEditor = () => {
                 <svg xmlns="http://www.w3.org/2000/svg" className="absolute top-0 left-0 w-full h-full pointer-events-none overflow-visible" style={{ overflow: 'visible' }}>
                     {edges.map(renderEdgeLine)}
                     {mode === 'edge' && linkingSourceId && nodes.find(n => n.id === linkingSourceId) && (
-                        <path d={`M ${nodes.find(n => n.id === linkingSourceId).x + NODE_WIDTH/2} ${nodes.find(n => n.id === linkingSourceId).y + NODE_HEIGHT/2} L ${mousePos.x} ${mousePos.y}`} stroke="#3b82f6" strokeWidth="2" strokeDasharray="5,5" pointerEvents="none" />
+                        <line
+                            x1={nodes.find(n => n.id === linkingSourceId).x + NODE_WIDTH/2}
+                            y1={nodes.find(n => n.id === linkingSourceId).y + NODE_HEIGHT/2}
+                            x2={mousePos.x}
+                            y2={mousePos.y}
+                            stroke="#3b82f6"
+                            strokeWidth="2"
+                            strokeDasharray="5,5"
+                            pointerEvents="none"
+                        />
                     )}
                 </svg>
 
